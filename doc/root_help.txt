@@ -1,0 +1,89 @@
+
+Note1: Cint is not aimed to be a 100% ANSI/ISO compliant C/C++ language
+ processor. It rather is a portable script language environment which
+ is close enough to the standard C++.
+
+Note2: Regulary check either of /tmp /usr/tmp /temp /windows/temp directory
+ and remove temp-files which are accidentally left by cint.
+
+Note3: Cint reads source file on-the-fly from the file system. Do not change
+ the active source during cint run. Use -C option or C1 command otherwise.
+
+Note4: In source code trace mode, cint sometimes displays extra-characters.
+ This is harmless. Please ignore.
+
+CINT/ROOT C/C++ interpreter interface.
+All commands must be preceded by a . (dot), except
+for the evaluation statement { } and the ?.
+===========================================================================
+             > [file]  : output redirection to [file]
+             2> [file] : error redirection to [file]
+             >& [file] : output&error redirection to [file]
+Help:        ?         : help
+             help      : help
+             /[keyword] : search keyword in help information
+Shell:       ![shell]  : execute shell command
+Source:      v <[line]>: view source code <around [line]>
+             V [stack] : view source code in function call stack
+             t         : show function call stack
+             f [file]  : select file to debug
+             T         : turn on/off trace mode for all source
+             J [stat]  : Set warning level [0-5]
+             A [1|0]   : allowing automatic variable on/off
+             trace <classname> : turn on trace mode for class
+             deltrace <classname> : turn off trace mode for class
+Evaluation:  p [expr]  : evaluate expression (no declaration/loop/condition)
+Evaluation:  s [expr]  : step into expression (no declaration/loop/condition)
+Evaluation:  S [expr]  : step over expression (no declaration/loop/condition)
+             {[statements]} : evaluate statement (any kind)
+             x [file]  : load [file] and execute function [file](w/o extension)
+             xk [file] : keep [file] if already loaded else load it, and execute function [file](w/o extension)
+             X [file]  : load [file] and execute function [file](w/o extension)
+             Xk [file] : keep [file] it already loaded else load it. and execute function [file](w/o extension)
+             E <[file]>: open editor and evaluate {statements} in the file
+Load/Unload: L [file]  : load [file]
+             Lk [file] : keep [file] if already loaded, else load it
+             La [file] : reload all files loaded after [file]
+             U [file]  : unload [file]
+             C [1|0]   : copy source to $TMPDIR (on/off)
+             undo      : undo previous declarations
+             lang      : local language (EUC,SJIS,EUROPEAN,UNKNOWN)
+             preproc   : toggle preprocessing of interpreted files
+Monitor:     g <[var]> : list global variable
+             l <[var]> : list local variable
+             proto <[scope]::>[func] : show function prototype
+             class <[name]> : show class definition (one level)
+             Class <[name]> : show class definition (all level)
+             typedef <name> : show typedefs
+             function  : show interpreted functions
+             macro     : show macro functions
+             template  : show templates
+             include   : show include paths
+             file      : show loaded files
+             where     : show current file position
+             security  : show security level
+             refcount  : reference count control on/off
+             garbage   : show garbage collection buffer
+             Garbage   : Do garbage collection
+             cover [file] : save trace coverage
+             return [val] : return undefined symbol value
+Run:         S         : step over function/loop
+             s         : step into function/loop
+             i         : ignore and step over
+             c <[line]>: continue <to [line]>
+             e         : step out from function
+             f [file]  : select file to debug
+             b [line]  : set break point
+             db [line] : delete break point
+             a [assert]: break only if assertion is true
+             O [0~4]   : Set bytecode compiler mode
+             debug     : bytecode status display on/off
+             asmstep   : bytecode step mode on/off
+             status    : show bytecode exec flags
+             dasm      : disassembler
+             except    : toggle exception catching
+Quit:        q         : quit cint
+             qqq       : quit cint - mandatory
+             qqqqq     : exit process immediately
+             qqqqqqq   : abort process
+             save      : call emergency routine to save important data

@@ -1,0 +1,131 @@
+# $Id: README 1224 2020-07-20 09:05:46Z mwang $
+#
+# A template for applications development with ROOT.
+#
+# Created by:  WANG Meng <mwang@sdu.edu.cn> at 2016-05-03 15:16:22
+########################################################################
+
+Usage
+-----
+
+1 on command-line:
+    $ make		# generate a library
+    $ make help		# print help information
+  It will generate a library, libmyroot.so, and a few executables.
+
+2 noise run
+    $ ./daq.exe -N -n 1000000 -a 7
+    
+3 physics run, Ctrl-C to stop.
+    $ ./control.sh [options]
+    # ...
+    # ctrl-C to stop
+
+  or
+    $ ./control.exe -R
+
+  or
+    # start
+    $ nohup ./control.exe -R > control.log 2>&1 &
+    $ tail -f control.log
+
+    # stop
+    $ pkill control.exe
+
+  NOT
+    # tofix: NOT work for ctrl-C
+    $ ./control.exe -R -n0 2>&1 | tee control.log
+
+
+Data analysis
+-------------
+1 book and fill histograms
+  book.exe /path/to/pattern*.root
+
+2 analyse histograms
+  root -l /path/to/pattern-hist.root
+  .L analyser.C+
+  root> physics()
+  ...
+
+3 following ways can also be used to book, fill and analyse
+  interactively.
+
+* waveform analysis
+  $ ./daq.exe -C -R -a7 ...
+  $ ./book.exe [-r n] [-c n] /path/to/pattern*.root
+  $ root -l /path/to/pattern-hist.root
+  root> .L analyser.C+
+  root> waveform_pix(0)
+  ...
+
+* event display
+  $ root -l
+  root> .L analyser.C+
+  root> anly = analyser("path/to/some*.root")
+  root> event_display(0);	// initialize
+  root> event_display(0, 100);	// save pdf file
+
+
+* pixels ADC and CDS
+  ...
+  pixels_row(0, "adc");		// a row of pixels
+  pixels(0, "adc");		// 16 rows of pixels
+  pixels_adc();			// save all pixels in pdf-file
+
+
+* fast way
+  $ root -l /path/to/somefile.root
+  root> anly = new SupixAnly(supix)
+  root> anly->get_RunInfo()->Print()		// run summary
+  root> anly->get_RunInfo()->Print_threshold()	// threshold for data taking
+  root> anly->get_RunInfo()->Print_noise_cds()	// cds noise
+  root> anly->get_RunInfo()->Print_noise_adc()	// adc noise
+  root> anly->Loop()				// fill histograms
+  ...
+  
+* The new library is loaded automatically by rootlogon.C.
+  $ root -l
+  root> .L analyser.C+
+  root> anly = analyser("path/to/some*.root")
+  root> anly->Loop()
+  root> control_plots()
+  root> control_plots()
+  ...
+
+* In case of ROOT data structure changed, SupixTree should be rebuilt
+  $ root -l /path/to/newfile.root
+  root> supix->MakeClass("SupixTree")
+
+
+Tag a revision
+--------------
+
+
+Naming Conventions
+------------------
+.cxx			library source
+.C			ROOT scripts
+
+
+source files
+------------
+README			this file
+Makefile		to compile and link applications using ROOT
+libdemo_LinkDef.h	for CINT dictionary
+rootlogon.C		ROOT startup script
+
+TestClass.{cxx,h}	a test class for library
+test_main.cxx		to test standalone executable
+test_root.C		a ROOT script to test the new library
+test_hybrid.C		a script can be used both in ROOT and on command-line.
+test_random_func.C	test the function of random variables.
+
+doc/			for application relevant documents
+job/			for job submission
+
+generated files
+---------------
+libdemo.so		shared library
+libdemo.rootmap		to load dependent libraries automatically
+*.exe			executables

@@ -1,0 +1,148 @@
+/*******************************************************************//**
+ * $Id: book.cxx 1228 2020-07-21 12:55:54Z mwang $
+ *
+ * Book and fill histograms from tree.
+ *
+ *
+ * @createdby:  WANG Meng <mwang@sdu.edu.cn> at 2020-07-12 13:04:19
+ * @copyright:  (c)2020 HEPG - Shandong University. All Rights Reserved.
+ ***********************************************************************/
+#include "SupixAnly.h"
+
+// C headers
+#include <unistd.h>     // for getopt()
+
+// C++ headers
+#include <iostream>
+#include <iomanip>
+using namespace std;
+
+
+void
+usage(char **argv)
+{
+   cout << "Usage: " << argv[0] << " [options] /path/to/pattern*.root" << endl
+	<< "\t\t -a		# fill all" << endl
+	<< "\t\t -b		# fill control plots" << endl
+	<< "\t\t -r NUM		# pixel row" << endl
+	<< "\t\t -c NUM		# pixel col" << endl
+	<< "\t\t -n NUM		# nentries" << endl
+	<< "\t\t -w NUM		# max number of waveforms" << endl
+	<< "\t\t -o pathname	# output histogram file" << endl
+	<< endl;
+   exit(0);
+}
+
+int
+main(int argc, char **argv)
+{
+   // defaults
+   string hfile;
+   int nentries = 0;
+   int row = -1, col = -1;
+   int nwaves_max = 10;
+   bool fill_ctrl = false	// control plots
+      , fill_wave = false	// waveforms
+      ;
+      
+   //................................................ command line options
+   // getopt() pre-defined variables:
+   //	  optind    : index to the next argv[] argument
+   //	  optarg    : char* to an option argument
+   int copt;
+   // int xint;
+   // unsigned long xulong;
+   while ((copt = getopt(argc, argv, "abc:n:o:r:w:")) != -1) {
+      switch (copt) {
+      case 'a':		// number of entries
+	 fill_ctrl = true;
+	 fill_wave = true;
+         break;
+      case 'b':		// number of entries
+	 fill_ctrl = true;
+         break;
+      case 'n':		// number of entries
+	 nentries = atoi(optarg);
+         break;
+      case 'r':		// pixel row
+	 row = atoi(optarg);
+	 fill_wave = true;
+         break;
+      case 'c':		// pixel col
+	 col = atoi(optarg);
+	 fill_wave = true;
+         break;
+      case 'o':		// output file name
+	 hfile = optarg;
+         break;
+      case 'w':		// pixel col
+	 nwaves_max = atoi(optarg);
+	 fill_wave = true;
+         break;
+      default:
+         usage(argv);
+      }
+   }
+   // check non-option arguments
+   if (argc == 1 /*|| optind < argc */) {
+      usage(argv);
+   }
+
+   LOG << "argc=" << argc
+       << " optind=" << optind
+       << endl;
+
+   // tree
+   TChain* chain = new TChain("supix");
+   
+   int nfiles = 0;
+   for (int i=optind; i < argc; i++) {
+      if (! hfile.size() && i == optind) {
+	 hfile = argv[i];
+	 hfile = hfile.substr(0, hfile.rfind('_') );
+	 hfile += "-hist.root";
+      }
+
+      int rv = chain->Add(argv[i]);
+      LOG << "Add: " << ++nfiles << " " << argv[i] << " " << rv << endl;
+   }
+   //chain->Print();
+
+   SupixAnly* anly = new SupixAnly(chain);
+   //anly->get_RunInfo()->Print();
+   gDirectory->pwd();
+
+   // open a histogram file for writing.
+   TFile* tfile = new TFile(hfile.c_str(), "RECREATE");
+   gDirectory->pwd();
+   anly->get_RunInfo()->Write("runinfo");
+
+   // book and fill histograms
+   anly->Book();
+   if (fill_ctrl) {
+      anly->Loop(nentries);
+      anly->Write();
+   }
+   
+   if (fill_wave) {
+      anly->set_nwaves_max(nwaves_max);
+      anly->build_waveform(nentries, row, col);
+      anly->write_waveform();
+   }
+   
+   //tfile->Write();
+   // if (fill_wave)
+   gDirectory->ls("-d");	// saved objects
+   tfile->Close();
+   
+   LOG <<  "convert " << argv[optind] << " ... "
+       << " => hfile=" << hfile
+       << endl;
+
+   // clean up
+   delete tfile;
+   delete anly;
+   delete chain;
+   
+   return 0;
+}

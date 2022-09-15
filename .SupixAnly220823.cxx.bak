@@ -1,0 +1,1357 @@
+/*******************************************************************//**
+ * $Id: SupixAnly.cxx 1271 2021-03-30 01:43:18Z mwang $
+ *
+ * class definition.
+ *
+ *
+ * @createdby:  WANG Meng <mwang@sdu.edu.cn> at 2019-04-18 23:05:16
+ * @copyright:  (c)2019 HEPG - Shandong University. All Rights Reserved.
+ ***********************************************************************/
+#include "SupixAnly.h"
+#include "Timer.h"
+
+#include <TH1D.h>
+#include <TH2D.h>
+#include <TProfile.h>
+#include <TStyle.h>
+#include <TPaveStats.h>
+#include <TMultiGraph.h>
+#include <TGraph.h>
+#include <iostream>
+#include <iomanip>
+#include <sstream>
+using namespace std;
+
+#define ALLPIXS			// control pixel-wise histograms
+#define MAXGRAPHS	100	// max saved graphs
+
+//
+// constructor(s)
+//______________________________________________________________________
+SupixAnly::SupixAnly(TTree *tree)
+   : SupixTree(tree)
+{
+   TRACE;
+   // initialize
+   m_nwaves_max = 10;
+   
+   for (int i=0; i < NROWS; i++) {
+      for (int j=0; j < NCOLS; j++) {
+	 m_adc[i][j] = 0;
+	 m_cds[i][j] = 0;
+      }
+   }
+
+   // LOG << fChain << endl;
+   get_RunInfo();
+   if (m_runinfo) {
+      m_pre_trigs = m_runinfo->pre_trigs;
+      m_post_trigs = m_runinfo->post_trigs;
+      m_nwave_norm = m_pre_trigs + 1 + m_post_trigs;
+      m_nwave_max = 2 * m_nwave_norm;
+      if (m_nwave_max > NWAVE_MAX) {
+	 cout << "TOO large waveform!!!" << endl;
+	 m_nwave_max = NWAVE_MAX;
+      }
+   }
+   else {
+      m_pre_trigs = 0;
+      m_nwave_norm = 10;	// default in RunInfo
+      m_nwave_max = NWAVE_MAX;
+   }
+
+   // int daq_mode = m_runinfo->daq_mode;
+   // LOG << "daq_mode=" << m_runinfo->daq_mode << " " << M_CONTINUOUS << endl;
+   if (m_runinfo_version >= 5 && m_runinfo->daq_mode == M_CONTINUOUS) {
+      m_continuous = true;
+      LOG << "daq_mode=" << M_CONTINUOUS << " CONTINUOUS" << endl;
+      m_nwave_max = NWAVE_MAX;
+   }
+   else {
+      m_continuous = false;
+   }
+   
+   m_npixs_trig = 0;
+   m_frame_start = 0;
+   m_wave_trig = 0;
+   
+   m_c1 = 0;
+   m_booked = false;
+}
+
+
+//
+// destructor
+//______________________________________________________________________
+SupixAnly::~SupixAnly()
+{
+   // for (int i=0; i < NCOLS; i++) {
+   //    delete m_mg_adc_pixs[i];
+   // }
+   delete []m_mg_adc_pixs;
+   delete []m_wave_adc_pixs;
+   delete []m_wave_adc_frame;
+   delete []m_mg_cds_pixs;
+   delete []m_wave_cds_pixs;
+   delete []m_wave_cds_trig;
+   delete []m_wave_cds_frame;
+   delete []m_wave_chi2_cds;
+
+}
+
+/***********************************************************************/
+
+//______________________________________________________________________
+void SupixAnly::scan(int row, int col, const char* cut)
+{
+   ostringstream oss;
+   oss << "frame:fid:trig:npixs:pixid[0]"
+       << ":pixel_adc[" << row << "][" << col << "]"
+       << ":pixel_cds[" << row << "][" << col << "]"
+      ;
+   fChain->Scan(oss.str().c_str(), cut);
+}
+
+
+// retrieve RunInfo
+//______________________________________________________________________
+RunInfo * SupixAnly::get_RunInfo()
+{
+   TRACE;
+   // must have a Tree first
+   Long64_t jentry = fChain->GetEntries() - 1;	// global
+   Long64_t ientry = fChain->LoadTree(jentry);	// last tree in chain
+   if (ientry < 0) {
+      LOG << "ERROR: LoadTree(" << jentry << ") !!!" << endl;
+      exit(-1);
+   }
+
+   m_runinfo = (RunInfo*)fChain->GetTree()->GetUserInfo()->At(0);
+   m_runinfo_version = m_runinfo->Class_Version();
+   cout << "RunInfo version=" << m_runinfo_version << endl;
+   if (! m_runinfo) {
+      LOG << "NO RunInfo object!!!" << endl;
+   }
+
+   return m_runinfo;
+}
+
+
+// book histograms
+//______________________________________________________________________
+void SupixAnly::Book()
+{
+   TRACE;
+   
+   ostringstream oss;
+   string hname, htitle;
+   int xbins, ybins;
+   double xmin, xmax, ymin, ymax;
+
+   TH1D* h1d;
+   TProfile* prf;
+   TH2D* h2d;
+   
+#ifdef ALLPIXS
+   m_list_adc = new TList;
+   m_list_cds = new TList;
+   for (int i=0; i < NROWS; i++) {
+      for (int j=0; j < NCOLS; j++) {
+	 // CDS
+	 oss.str("");
+	 oss << "cds_" << i << "_" << j;
+	 hname = oss.str();
+	 oss.str("");
+	 oss << "CDS[" << i << "][" << j << "];CDS";
+	 htitle = oss.str();
+	 h1d = (TH1D*)gDirectory->Get(hname.c_str() );
+	 if (h1d) delete h1d;
+	 xmin = -16, xmax = 8;
+	 xbins = xmax - xmin;
+	 h1d = new TH1D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax);
+	 m_cds[i][j] = h1d;
+	 m_list_cds->Add(h1d);
+
+	 // ADC
+	 oss.str("");
+	 oss << "adc_" << i << "_" << j;
+	 hname = oss.str();
+	 oss.str("");
+	 oss << "ADC[" << i << "][" << j << "];ADC";
+	 htitle = oss.str();
+	 h1d = (TH1D*)gDirectory->Get(hname.c_str() );
+	 if (h1d) delete h1d;
+	 xmin = g_adc_cor_min, xmax = g_adc_cor_max;
+	 xbins = xmax - xmin;
+	 h1d = new TH1D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax);
+	 m_adc[i][j] = h1d;
+	 m_list_adc->Add(h1d);
+      }
+   }
+#endif
+
+   m_list_misc = new TList;
+
+   // trig pattern
+   xmin = 0, xmax = 4;
+   xbins = xmax - xmin;
+   hname = "trig";
+   htitle = "trigger pattern;trigger";
+   h1d = (TH1D*)gDirectory->Get(hname.c_str() );
+   if (h1d) delete h1d;
+   h1d = new TH1D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax);
+   m_trig = h1d;
+   m_list_misc->Add(h1d);
+   
+   // fid
+   xmin = 0, xmax = 16;
+   xbins = xmax - xmin;
+   hname = "fid";
+   htitle = "frames with non-periodic fired pixels;frame id";
+   h1d = (TH1D*)gDirectory->Get(hname.c_str() );
+   if (h1d) delete h1d;
+   h1d = new TH1D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax);
+   m_fid = h1d;
+   m_list_misc->Add(h1d);
+
+   // npixs
+   xmin = 0, xmax = g_npixs_max;
+   xbins = xmax - xmin;
+   hname = "npixs";
+   htitle = "Npixels of fired frame;N_{pixels}";
+   h1d = (TH1D*)gDirectory->Get(hname.c_str() );
+   if (h1d) delete h1d;
+   h1d = new TH1D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax);
+   m_npixs = h1d;
+   m_list_misc->Add(h1d);
+
+   // chi2_cds
+   xmin = g_chi2_min, xmax = g_chi2_max;
+   xbins = xmax - xmin;
+   hname = "chi2_cds";
+   htitle = "chi2 of non-triged events;#chi^{2}_{cds};Entries / 1";
+   h1d = (TH1D*)gDirectory->Get(hname.c_str() );
+   if (h1d) delete h1d;
+   h1d = new TH1D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax);
+   m_chi2_cds = h1d;
+   m_list_misc->Add(h1d);
+
+   // chi2_trig
+   xmin = g_chi2_min, xmax = g_chi2_max;
+   xbins = xmax - xmin;
+   hname = "chi2_trig";
+   htitle = "chi2 of triged events;#chi^{2}_{trig};Entries / 1";
+   h1d = (TH1D*)gDirectory->Get(hname.c_str() );
+   if (h1d) delete h1d;
+   h1d = new TH1D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax);
+   m_chi2_trig = h1d;
+   m_list_misc->Add(h1d);
+
+   // chi2_trig
+   xmin = 0, xmax = 1000;
+   xbins = xmax - xmin;
+   hname = "dTevt";
+   htitle = "time difference between consecutive events;#DeltaT_{evt};Entries / 1";
+   h1d = (TH1D*)gDirectory->Get(hname.c_str() );
+   if (h1d) delete h1d;
+   h1d = new TH1D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax);
+   m_dTevt = h1d;
+   m_list_misc->Add(h1d);
+
+   // hitmap
+   xmin = 0, xmax = NCOLS;
+   xbins = xmax - xmin;
+   ymin = 0, ymax = NROWS;
+   ybins = ymax - ymin;
+   hname = "hitmap_cds";
+   oss.str("");
+   oss << "hitmap of fired pixels;COL;ROW";
+   htitle = oss.str();
+   h2d = (TH2D*)gDirectory->Get(hname.c_str() );
+   if (h2d) delete h2d;
+   h2d = new TH2D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax, ybins, ymin, ymax);
+   m_hitmap_cds = h2d;
+   m_list_misc->Add(h2d);
+
+   // trig_cds
+   xmin = g_cds_min, xmax = 0;
+   xbins = xmax - xmin;
+   hname = "trig_cds";
+   htitle = "CDS of fired pixels;CDS normalized";
+   h1d = (TH1D*)gDirectory->Get(hname.c_str() );
+   if (h1d) delete h1d;
+   h1d = new TH1D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax);
+   m_trig_cds = h1d;
+   m_list_misc->Add(h1d);
+
+   // trig_cds_sum
+   xmin = g_cds_sum_min, xmax = 0;
+   xbins = xmax - xmin;
+   hname = "trig_cds_sum";
+   htitle = "sum CDS of fired pixels;sum CDS_{fired}";
+   h1d = (TH1D*)gDirectory->Get(hname.c_str() );
+   if (h1d) delete h1d;
+   h1d = new TH1D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax);
+   m_trig_cds_sum = h1d;
+   m_list_misc->Add(h1d);
+
+   // trig_cds_npixs
+   xmin = g_cds_sum_min, xmax = 0;
+   xbins = xmax - xmin;
+   ymin = 0, ymax = g_npixs_max;
+   ybins = ymax - ymin;
+   hname = "trig_cds_npixs";
+   oss.str("");
+   oss << "sum CDS vs Npixels;sum CDS_{fired};N_{pixel}";
+   htitle = oss.str();
+   h2d = (TH2D*)gDirectory->Get(hname.c_str() );
+   if (h2d) delete h2d;
+   h2d = new TH2D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax, ybins, ymin, ymax);
+   m_trig_cds_npixs = h2d;
+   m_list_misc->Add(h2d);
+
+   // cds_raw
+   xmin = g_cds_min, xmax = g_cds_max;
+   xbins = xmax - xmin;
+   hname = "cds_raw";
+   htitle = "CDS raw of all pixels;CDS raw";
+   h1d = (TH1D*)gDirectory->Get(hname.c_str() );
+   if (h1d) delete h1d;
+   h1d = new TH1D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax);
+   m_cds_raw = h1d;
+   m_list_misc->Add(h1d);
+
+   // cds_cor
+   xmin = g_cds_min, xmax = g_cds_max;
+   xbins = xmax - xmin;
+   hname = "cds_cor";
+   htitle = "corrected CDS of all pixels;CDS normalized";
+   h1d = (TH1D*)gDirectory->Get(hname.c_str() );
+   if (h1d) delete h1d;
+   h1d = new TH1D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax);
+   m_cds_cor = h1d;
+   m_list_misc->Add(h1d);
+
+   // cds_frame_raw
+   xmin = 0, xmax = NPIXS;
+   xbins = xmax - xmin;
+   ymin = g_cds_min, ymax = g_cds_max;
+   hname = "cds_frame_raw";
+   htitle = "CDS raw of frame pixels;64#timesCOL + ROW;CDS raw";
+   prf = (TProfile*)gDirectory->Get(hname.c_str() );
+   if (prf) delete prf;
+   prf = new TProfile(hname.c_str(), htitle.c_str(), xbins, xmin, xmax, ymin, ymax);
+   m_cds_frame_raw = prf;
+   m_list_misc->Add(prf);
+
+   // cds_frame_cor
+   xmin = 0, xmax = NPIXS;
+   xbins = xmax - xmin;
+   ymin = g_cds_min, ymax = g_cds_max;
+   hname = "cds_frame_cor";
+   htitle = "corrected CDS of frame pixels;64#timesCOL + ROW;CDS normalized";
+   prf = (TProfile*)gDirectory->Get(hname.c_str() );
+   if (prf) delete prf;
+   prf = new TProfile(hname.c_str(), htitle.c_str(), xbins, xmin, xmax, ymin, ymax);
+   m_cds_frame_cor = prf;
+   m_list_misc->Add(prf);
+   
+   // adc_raw
+   xmin = 0, xmax = 0x10000;
+   xbins = 0x200;	// 512
+   hname = "adc_raw";
+   htitle = "ADC raw of all pixels;ADC";
+   h1d = (TH1D*)gDirectory->Get(hname.c_str() );
+   if (h1d) delete h1d;
+   h1d = new TH1D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax);
+   m_adc_raw = h1d;
+   m_list_misc->Add(h1d);
+
+   // adc_cor
+   xmin = g_adc_cor_min, xmax = g_adc_cor_max;
+   xbins = xmax - xmin;
+   hname = "adc_cor";
+   htitle = "corrected ADC of all pixels;ADC normalized";
+   h1d = (TH1D*)gDirectory->Get(hname.c_str() );
+   if (h1d) delete h1d;
+   h1d = new TH1D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax);
+   m_adc_cor = h1d;
+   m_list_misc->Add(h1d);
+
+   // adc_frame_raw
+   xmin = 0, xmax = NPIXS;
+   xbins = xmax - xmin;
+   ymin = 0, ymax = g_adc_max;
+   hname = "adc_frame_raw";
+   htitle = "ADC raw of frame pixels;64#timesCOL + ROW;ADC raw";
+   prf = (TProfile*)gDirectory->Get(hname.c_str() );
+   if (prf) delete prf;
+   prf = new TProfile(hname.c_str(), htitle.c_str(), xbins, xmin, xmax, ymin, ymax);
+   m_adc_frame_raw = prf;
+   m_list_misc->Add(prf);
+
+   // adc_frame_cor
+   xmin = 0, xmax = NPIXS;
+   xbins = xmax - xmin;
+   ymin = g_adc_cor_min, ymax = g_adc_cor_max;
+   hname = "adc_frame_cor";
+   htitle = "corrected ADC of frame pixels;64#timesCOL + ROW;ADC normalized";
+   prf = (TProfile*)gDirectory->Get(hname.c_str() );
+   if (prf) delete prf;
+   prf = new TProfile(hname.c_str(), htitle.c_str(), xbins, xmin, xmax, ymin, ymax);
+   m_adc_frame_cor = prf;
+   m_list_misc->Add(prf);
+
+   // waveform_cor
+   xmin = -m_pre_trigs, xmax = m_nwave_max - m_pre_trigs;
+   xbins = xmax - xmin;
+   ymin = g_cds_min, ymax = g_cds_max;
+   hname = "waveform_cor";
+   htitle = "waveform of corrected CDS;frame;CDS normalized";
+   prf = (TProfile*)gDirectory->Get(hname.c_str() );
+   if (prf) delete prf;
+   prf = new TProfile(hname.c_str(), htitle.c_str(), xbins, xmin, xmax, ymin, ymax);
+   m_waveform_cor = prf;
+   m_list_misc->Add(prf);
+
+   m_mg_adc_frame = new TMultiGraph("wave_adc_frame", ";frame;sum ADC of all pixels");
+
+   // all pixels
+   m_list_wave_adc = new TList;
+   m_mg_adc_pixs = new TMultiGraph[NPIXS];
+   m_list_wave_cds = new TList;
+   m_mg_cds_pixs = new TMultiGraph[NPIXS];
+   TMultiGraph* mg;
+   for (int i=0; i < NROWS; i++) {
+      for (int j=0; j < NCOLS; j++) {
+	 mg = &(*(m_mg_adc_pixs +j+i*NCOLS) );
+	 m_list_wave_adc->Add(mg);
+	 oss.str("");
+	 oss << "wave_adc_pix_r" << i << "_c" << j;
+	 mg->SetName(oss.str().c_str() );
+	 mg->SetTitle("ADC waveform of a pixel;frame;ADC");
+	 
+	 mg = &(*(m_mg_cds_pixs +j+i*NCOLS) );
+	 m_list_wave_cds->Add(mg);
+	 oss.str("");
+	 oss << "wave_cds_pix_r" << i << "_c" << j;
+	 mg->SetName(oss.str().c_str() );
+	 mg->SetTitle("CDS waveform of a pixel;frame;CDS");
+      }
+   }
+   
+   m_mg_cds_trig = new TMultiGraph("wave_cds_trig", ";frame;sum CDS of fired pixels");
+   m_mg_cds_frame = new TMultiGraph("wave_cds_frame", ";frame;sum CDS of all pixels");
+   m_mg_chi2_cds = new TMultiGraph("wave_chi2_cds", ";frame;#chi^{2}_{CDS}");
+
+   // arrays for waveforms
+   m_wave_adc_pixs	= new double[NWAVE_MAX*NPIXS];
+   m_wave_adc_frame	= new double[NWAVE_MAX];
+   m_wave_cds_pixs	= new double[NWAVE_MAX*NPIXS];
+   m_wave_cds_trig	= new double[NWAVE_MAX];
+   m_wave_cds_frame	= new double[NWAVE_MAX];
+   m_wave_chi2_cds	= new double[NWAVE_MAX];
+
+   // physics
+   //--------
+   
+   // cds_1pix
+   xmin = 0, xmax = 250;
+   xbins = xmax - xmin;
+   hname = "cds_1pix";
+   htitle = ";ADC;Entries / 1 ADC";
+   h1d = (TH1D*)gDirectory->Get(hname.c_str() );
+   if (h1d) delete h1d;
+   h1d = new TH1D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax);
+   m_cds_1pix = h1d;
+   m_list_misc->Add(h1d);
+   
+   m_booked = true;
+}
+
+// write out non-histogram objects
+//______________________________________________________________________
+void SupixAnly::write_waveform()
+{
+   m_mg_adc_frame->Write();
+   m_mg_cds_trig->Write();
+   m_mg_cds_frame->Write();
+   m_mg_chi2_cds->Write();
+
+   LOG << gFile->GetName() << endl;
+   // save pixels waveforms in a subdir
+   const char* subdir = "wave_pixs";
+   gFile->mkdir(subdir);
+   gFile->cd(subdir);
+   //bytes = m_list_wave_adc->Write("wave_adc", 1);
+   m_list_wave_adc->Write();
+   // m_list_wave_cds->Write("wave_cds", 1);
+   m_list_wave_cds->Write();
+   // others in home dir
+   gFile->cd();
+}
+
+// write out non-histogram objects
+//______________________________________________________________________
+void SupixAnly::Write()
+{
+   m_list_adc->Write("pix_adc", 1);
+   m_list_cds->Write("pix_cds", 1);
+   m_list_misc->Write();
+}
+
+// fill histograms
+//______________________________________________________________________
+void SupixAnly::Loop()
+{
+   TRACE;
+   if (fChain == 0) return;
+   //Long64_t nentries = fChain->GetEntriesFast();
+   Long64_t nentries = fChain->GetEntries();
+   LOG << " nentries = " << nentries << endl;
+   Loop(nentries);
+}
+
+//______________________________________________________________________
+void SupixAnly::Loop(Long64_t nentries)
+{
+   TRACE;
+   //   In a ROOT session, you can do:
+   //      Root > .L SupixTree.C
+   //      Root > SupixTree t
+   //      Root > t.GetEntry(12); // Fill t data members with entry number 12
+   //      Root > t.Show();       // Show values of entry 12
+   //      Root > t.Show(16);     // Read and show values of entry 16
+   //      Root > t.Loop();       // Loop on all entries
+   //
+
+   //     This is the loop skeleton where:
+   //    jentry is the global entry number in the chain
+   //    ientry is the entry number in the current Tree
+   //  Note that the argument to GetEntry must be:
+   //    jentry for TChain::GetEntry
+   //    ientry for TTree::GetEntry and TBranch::GetEntry
+   //
+   //       To read only selected branches, Insert statements like:
+   // METHOD1:
+   //    fChain->SetBranchStatus("*",0);  // disable all branches
+   //    fChain->SetBranchStatus("branchname",1);  // activate branchname
+   // METHOD2: replace line
+   //    fChain->GetEntry(jentry);       //read all branches
+   //by  b_branchname->GetEntry(ientry); //read only this branch
+   if (fChain == 0) return;
+
+   Timer timer(__func__);
+   timer.start();
+   
+   if (! m_booked)
+      Book();
+
+   if (nentries == 0)
+      nentries = fChain->GetEntriesFast();
+
+   //
+   // before starting the global loop
+   //
+   ULong64_t frame_last = 0;	// of last triged event
+
+   unsigned long nconsecutives = 0;	// consecutive trigs
+   unsigned long nhits = 0;		// real trig
+   Long64_t nbytes = 0, nb = 0;
+   for (Long64_t jentry=0; jentry<nentries;jentry++) {
+      Long64_t ientry = LoadTree(jentry);
+      if (ientry < 0) break;
+      nb = fChain->GetEntry(jentry);
+      nbytes += nb;
+      // if (Cut(ientry) < 0) continue;
+      //--------------------------------------->> start here
+
+      // for each new tree
+      if (ientry == 0) {
+	 LOG << fChain->GetCurrentFile()->GetName() << endl;
+	 m_runinfo = (RunInfo*)fChain->GetTree()->GetUserInfo()->At(0);
+      }
+      
+      adc_t*	padc = (adc_t*)pixel_adc;
+      cds_t*	pcds = (cds_t*)pixel_cds;
+      // double	cds_x = m_runinfo->trig_cds_x;
+      double*	pthr = (double*)(m_runinfo->trig_cds);
+      double*	pcds_mean = (double*)(m_runinfo->cds_mean);
+      double*	pcds_sigma = (double*)(m_runinfo->cds_sigma);
+      double*	padc_mean = (double*)(m_runinfo->adc_mean);
+      double*	padc_sigma = (double*)(m_runinfo->adc_sigma);
+      double	cds_cor, adc_cor;
+      double	chi2_cds = 0;
+      double	chi2_trig = 0;
+#ifdef DEBUG
+      LOG << "DEBUG"
+	  << " ientry=" << ientry
+	  << " runinfo=" << m_runinfo
+	  << " *pcds_mean=" << *pcds_mean
+	  << " *pcds_sigma=" << *pcds_sigma
+	  << endl;
+#endif
+      for (int i=0; i < NROWS; i++) {//+++++++++++++++++++++++++++++++++start a frame
+	 for (int j=0; j < NCOLS; j++) {
+	    cds_cor = *pcds - *pcds_mean;
+	    cds_cor /= *pcds_sigma;		// normalized
+	    adc_cor = *padc - *padc_mean;
+	    adc_cor /= *padc_sigma;		// normalized
+	    chi2_cds += cds_cor * cds_cor;
+#ifdef ALLPIXS
+	    // m_cds[i][j]->Fill( *pcds );
+	    m_cds[i][j]->Fill(cds_cor);
+	    // m_adc[i][j]->Fill(*padc);
+	    m_adc[i][j]->Fill(adc_cor);
+#endif
+	    // CDS
+	    m_cds_raw->Fill(*pcds);
+	    m_cds_cor->Fill(cds_cor);
+
+	    // CDS profile
+	    m_cds_frame_raw->Fill(NROWS*j + i, *pcds);
+	    m_cds_frame_cor->Fill(NROWS*j + i, cds_cor);
+
+	    // ADC
+	    m_adc_raw->Fill(*padc);
+	    m_adc_cor->Fill(adc_cor);
+
+	    // ADC profile
+	    m_adc_frame_raw->Fill(NROWS*j + i, *padc);
+	    m_adc_frame_cor->Fill(NROWS*j + i, adc_cor);
+	    
+	    // next pixel
+	    padc++;
+	    pcds++;
+	    pthr++;
+	    pcds_mean++;
+	    pcds_sigma++;
+	    padc_mean++;
+	    padc_sigma++;
+	 }
+      }//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~end a frame
+
+      // frame-wise
+      //
+      // of triged frame
+      if (true_trig(trig) ) {
+	 m_trig->Fill(trig+0.5);
+
+	 // excluding periodic trigs
+	 if (trig > 1) {
+	    nhits++;
+	    double cds_sum = 0;
+	    for (int i=0; i < npixs; i++) {
+	       int row = pixid[i] >> NBITS_COL;
+	       int col = pixid[i] &  MASK_COL;
+	       m_hitmap_cds->Fill(col+0.5, row+0.5);
+
+	       double cds_cor = pixel_cds[row][col] - m_runinfo->cds_mean[row][col];
+	       cds_cor /= m_runinfo->cds_sigma[row][col];	// normalize by sigma
+	       m_trig_cds->Fill(cds_cor);
+	       cds_sum += cds_cor;
+	    }
+	    
+	    m_fid->Fill(fid + 0.5);
+	    m_npixs->Fill(npixs);
+	    m_trig_cds_sum->Fill(cds_sum);
+	    m_trig_cds_npixs->Fill(cds_sum, npixs);
+	    m_dTevt->Fill((double)(frame - frame_last) );
+	    if (1 == frame - frame_last) {
+	       nconsecutives++;
+	       if (nconsecutives % 100 == 1) {
+		  cout << "DEBUG"
+		       << " nconsecutives=" << nconsecutives
+		       << " frame=" << frame
+		       << " trig=" << (short)trig
+		       << " chi2_cds=" << chi2_cds
+		       << " npixs=" << npixs << ":"
+		     ;
+		  for (int i=0; i < npixs; i++) {
+		     int row = pixid[i] >> NBITS_COL;
+		     int col = pixid[i] &  MASK_COL;
+		     double cds_cor = pixel_cds[row][col] - m_runinfo->cds_mean[row][col];
+		     cds_cor /= m_runinfo->cds_sigma[row][col];	// normalize by sigma
+		     cout << " [" << row << " " << col << " " << cds_cor << "]";
+		  }
+		  cout << endl;
+	       }
+	    }
+	    frame_last = frame;
+	 }
+      }
+
+      if (trig > 1 && trig < TRIG_PRE)	m_chi2_trig->Fill(chi2_cds);
+      else				m_chi2_cds->Fill(chi2_cds);
+	 
+      // next frame
+      if (ientry%10000 == 0)
+	 LOG
+	    << " entry = " << ientry << "/" << jentry
+	    << " bytes = " << nb << "/" << nbytes
+	    << endl;
+   }
+
+   LOG
+      << " Total entries = " << nentries
+      << " nhits=" << nhits
+      << " nconsecutives=" << nconsecutives
+      << endl;
+
+   timer.stop();
+   timer.print(1);
+   // fChain->GetUserInfo()->Dump();
+}
+
+// after a full waveform found
+//______________________________________________________________________
+void SupixAnly::fill_waveform()
+{
+   static int ngfs = 0;
+   int npx = m_nwave_frames;
+   double xp[npx]
+      , ycds_sum[npx], yadc_sum[npx]
+      , ycds_trig[npx]
+      , ychi2_cds[npx]
+      ;
+   
+   if (m_exceedings)
+      cout << "waveform #" //<< nwaves << ":"
+	   << " exceeding " << m_exceedings << " frames"
+	   << " max=" << m_nwave_max
+	   << endl;
+   
+   for (int i = 0; i < m_nwave_frames; i++) {
+      m_waveform_cor->Fill(i - m_nwave_trig, m_wave_cds_frame[i]);
+
+      xp[i] = i - m_nwave_trig;
+      ycds_trig[i] = m_wave_cds_trig[i];
+      ycds_sum[i] = m_wave_cds_frame[i];
+      yadc_sum[i] = m_wave_adc_frame[i];
+      ychi2_cds[i] = m_wave_chi2_cds[i];
+   }
+
+   // selected pixel's
+   if (ngfs < MAXGRAPHS && (m_pix_fired || m_continuous) ) {		// max graphs
+      ngfs++;
+      ostringstream oss;
+      TGraph* gf;
+
+      // a frame of pixels ADC
+      for (int j=0; j < NPIXS; j++) {
+	 double yp[npx];
+	 for (int i=0; i < npx; i++)
+	    yp[i] = m_wave_adc_pixs[j + NPIXS*i];
+	 gf = new TGraph(npx, xp, yp);
+	 m_mg_adc_pixs[j].Add(gf);
+	 oss.str("");
+	 oss << "ADC pixel[" << j/NCOLS << ", " << j%NCOLS << "]"
+	     << ";frame;pixel ADC normalized"
+	    ;
+	 gf->SetTitle(oss.str().c_str() );
+	 gf->GetXaxis()->SetLimits(-10-m_pre_trigs, m_nwave_frames-m_nwave_trig+10);
+      }
+
+      // a frame of pixels CDS
+      for (int j=0; j < NPIXS; j++) {
+	 double yp[npx];
+	 for (int i=0; i < npx; i++)
+	    yp[i] = m_wave_cds_pixs[j + NPIXS*i];
+	 gf = new TGraph(npx, xp, yp);
+	 m_mg_cds_pixs[j].Add(gf);
+	 oss.str("");
+	 oss << "CDS pixel[" << j/NCOLS << ", " << j%NCOLS << "]"
+	     << ";frame;pixel CDS normalized"
+	    ;
+	 gf->SetTitle(oss.str().c_str() );
+	 gf->GetXaxis()->SetLimits(-10-m_pre_trigs, m_nwave_frames-m_nwave_trig+10);
+      }
+      
+      // CDS frame
+      gf = new TGraph(npx, xp, ycds_sum);
+      m_mg_cds_frame->Add(gf);
+      oss.str("");
+      oss << "sum CDS frame:"
+	  << " F=" << m_frame_start << "-" << m_frame_start + m_nwave_frames - 1
+	  << " trig=" << m_wave_trig
+	  << " npixs=" << m_npixs_trig
+	  << ";frame;sum CDS of all pixels"
+	 ;
+      gf->SetTitle(oss.str().c_str() );
+      gf->GetXaxis()->SetLimits(-10-m_pre_trigs, m_nwave_frames-m_nwave_trig+10);
+      
+      // ADC frame
+      gf = new TGraph(npx, xp, yadc_sum);
+      m_mg_adc_frame->Add(gf);
+      oss.str("");
+      oss << "sum ADC frame:"
+	  << " F=" << m_frame_start << "-" << m_frame_start + m_nwave_frames - 1
+	  << " trig=" << m_wave_trig
+	  << " npixs=" << m_npixs_trig
+	  << ";frame;sum ADC normalized"
+	 ;
+      gf->SetTitle(oss.str().c_str() );
+      gf->GetXaxis()->SetLimits(-10-m_pre_trigs, m_nwave_frames-m_nwave_trig+10);
+      
+      // CDS trig
+      gf = new TGraph(npx, xp, ycds_trig);
+      m_mg_cds_trig->Add(gf);
+      oss.str("");
+      oss << "sum CDS tirg:"
+	  << " F=" << m_frame_start << "-" << m_frame_start + m_nwave_frames - 1
+	  << " trig=" << m_wave_trig
+	  << " npixs=" << m_npixs_trig
+	  << ";frame;sum CDS of pixels > "
+	  << m_runinfo->trig_cds_x << "#sigma:"
+	 ;
+      gf->SetTitle(oss.str().c_str() );
+      gf->GetXaxis()->SetLimits(-10-m_pre_trigs, m_nwave_frames-m_nwave_trig+10);
+      
+      // chi2 CDS
+      gf = new TGraph(npx, xp, ychi2_cds);
+      m_mg_chi2_cds->Add(gf);
+      oss.str("");
+      oss << "#chi^{2}_{CDS}:"
+	  << " F=" << m_frame_start << "-" << m_frame_start + m_nwave_frames - 1
+	  << " trig=" << m_wave_trig
+	  << " npixs=" << m_npixs_trig
+	  << ";frame;#chi^{2}_{CDS}"
+	 ;
+      gf->SetTitle(oss.str().c_str() );
+      gf->GetXaxis()->SetLimits(-10-m_pre_trigs, m_nwave_frames-m_nwave_trig+10);
+
+   }
+   
+   if (
+#ifdef DEBUG
+       true ||
+#endif
+       m_nwave_trig > m_pre_trigs) {	// should not happen!!!
+      LOG << "#frame=" << m_frame_start
+	  << " waveform Nframes=" << m_nwave_frames
+	  << " trig=" << m_nwave_trig
+	  << ":";
+#ifdef DEBUG
+      for (int i=0; i < m_nwave_frames; i++)
+	 cout << setw(6) << m_wave_cds_frame[i];
+#endif
+      cout << endl;
+   }
+   
+}
+
+// build waveforms
+// - the same structure as Loop()
+// - pixel [row, col]
+//   < 0 : any from pixid[] or 0
+//______________________________________________________________________
+void SupixAnly::build_waveform(Long64_t nentries, int row, int col)
+{
+   if (fChain == 0) return;
+   Timer timer(__func__);
+   timer.start();
+   
+   if (! m_booked)
+      Book();
+
+   if (nentries == 0)
+      nentries = fChain->GetEntriesFast();
+
+   //
+   // before starting the global loop
+   //
+   ULong64_t frame_last = -1;	// for determing start of a new waveform
+   // long nhits = 0;
+   trig_t trig_last = 0;
+   // bool newwave = true;
+   long ntrigs_after = 0;	// sum of trigs after the first one in a waveform
+   int	nwave_max = 0;		// max frames of a waveform
+
+   m_nwaves = 0;
+   m_nwave_frames = 0;		// for continuous mode
+   m_nwave_trig = 0;
+   
+   Long64_t nbytes = 0, nb = 0;
+   for (Long64_t jentry=0; jentry<nentries;jentry++) {
+      Long64_t ientry = LoadTree(jentry);
+      if (ientry < 0) break;
+      nb = fChain->GetEntry(jentry);
+      nbytes += nb;
+
+      //--------------------------------------->> start here
+
+      // start of a new waveform
+      if (frame - frame_last != 1			// discontinued #frame
+	  || (trig_last == 0 && trig == TRIG_PRE)	// trig: post -> pre
+	  || (m_continuous && m_nwave_frames % NWAVE_MAX == 0)	// continuous daq mode
+	  )
+      {//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++start a new waveform
+	 if (m_nwaves >= m_nwaves_max)
+	    break;
+	 
+	 if (m_nwaves % 10 == 0)
+	    cout << __PRETTY_FUNCTION__ << " new waveform"
+		 << " #" << m_nwaves
+		 << " @ frame=" << frame
+		 << endl;
+	 
+	 // newwave = true;
+	 if (m_nwaves) {		// fill last waveform if existing
+	    fill_waveform();
+	 }
+	 m_nwaves++;
+	 
+	 // after fill_waveform()
+	 // - reset for a new waveform
+	 m_nwave_frames = 0;		// count of frames, frame-index
+	 m_exceedings = 0;		// exceeded frames
+	 m_npixs_trig = npixs;		// npixs of triged frame
+	 m_frame_start = frame;		// start #frame
+
+	 // select a pixel
+	 m_pix_row = row;
+	 m_pix_col = col;
+	 m_pix_fired = false;
+	 for (int i=0; i < npixs; i++) {
+	    int _row = pixid[i] >> NBITS_COL;
+	    int _col = pixid[i] &  MASK_COL;
+	    if (row < 0 && col < 0) {	// first fired pixel
+	       m_pix_row = _row;
+	       m_pix_col = _col;
+	       m_pix_fired = true;
+	       break;
+	    }
+	    else if (row < 0) {	// col pre-selected
+	       if (_col == col) {
+		  m_pix_row = _row;
+		  m_pix_fired = true;
+		  break;
+	       }
+	    }
+	    else if (col < 0) {	// col pre-selected
+	       if (_row == row) {
+		  m_pix_col = _col;
+		  m_pix_fired = true;
+		  break;
+	       }
+	    }
+	    else {
+	       if (_row == row && _col == col) {
+		  m_pix_row = _row;
+		  m_pix_col = _col;
+		  m_pix_fired = true;
+		  break;
+	       }
+	    }
+	 }
+	 // in case no matched pixel found
+	 if (m_pix_row < 0) m_pix_row = 0;
+	 if (m_pix_col < 0) m_pix_col = 0;
+	 
+      }//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~end a new waveform
+      
+      m_wave_adc_frame[m_nwave_frames] = 0;
+      m_wave_cds_trig[m_nwave_frames] = 0;
+      m_wave_cds_frame[m_nwave_frames] = 0;
+      m_wave_chi2_cds[m_nwave_frames] = 0;
+
+      // fired pixels
+      for (int i=0; i < npixs; i++) {
+	 int row = pixid[i] >> NBITS_COL;
+	 int col = pixid[i] &  MASK_COL;
+	 double cds_cor = pixel_cds[row][col] - m_runinfo->cds_mean[row][col];
+	 cds_cor /= m_runinfo->cds_sigma[row][col];	// normalize by sigma
+	 m_wave_cds_trig[m_nwave_frames] += cds_cor;
+      }
+
+      
+      // of triged frame
+      if (true_trig(trig) ) {
+	 // first triged frame
+	 if (trig_last == TRIG_PRE) {		// pre -> trig
+	    m_nwave_trig = m_nwave_frames;	// triged frame-index
+	    m_wave_trig = trig;			// triged pattern
+	 }
+	 else
+	    ntrigs_after++;
+      }
+      
+      // pixel-wise histograms
+      adc_t*	padc = (adc_t*)pixel_adc;
+      cds_t*	pcds = (cds_t*)pixel_cds;
+      double*	pthr = (double*)(m_runinfo->trig_cds);
+      double*	pcds_mean = (double*)(m_runinfo->cds_mean);
+      double*	pcds_sigma = (double*)(m_runinfo->cds_sigma);
+      double*	padc_mean = (double*)(m_runinfo->adc_mean);
+      double*	padc_sigma = (double*)(m_runinfo->adc_sigma);
+      double	cds_cor, adc_cor;
+      for (int i=0; i < NROWS; i++) {
+	 for (int j=0; j < NCOLS; j++) {
+	    cds_cor = *pcds - *pcds_mean;
+	    cds_cor /= *pcds_sigma;		// normalized
+	    adc_cor = *padc - *padc_mean;
+	    adc_cor /= *padc_sigma;		// normalized
+
+	    m_wave_cds_frame[m_nwave_frames] += cds_cor;
+	    m_wave_adc_frame[m_nwave_frames] += adc_cor;
+	    m_wave_adc_pixs[j+i*NCOLS + NPIXS*m_nwave_frames] = adc_cor;
+	    m_wave_cds_pixs[j+i*NCOLS + NPIXS*m_nwave_frames] = cds_cor;
+	    m_wave_chi2_cds[m_nwave_frames] += cds_cor*cds_cor;
+	    
+	    // next pixel
+	    padc++;
+	    pcds++;
+	    pthr++;
+	    pcds_mean++;
+	    pcds_sigma++;
+	    padc_mean++;
+	    padc_sigma++;
+	 }
+      }//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~end loop of a frame
+
+      // next frame
+      frame_last = frame;
+      trig_last = trig;
+      // boundary check
+      if (m_nwave_frames < m_nwave_max) {
+	 m_nwave_frames++;
+      }
+      else {
+	 m_exceedings++;
+      }
+      if (nwave_max < m_nwave_frames)
+	 nwave_max = m_nwave_frames;
+      
+      //cout<<"Total entries = "<<nentries<<endl;
+   }
+
+   // last waveform
+   if (m_nwaves) {
+      fill_waveform();
+      // write_waveform();
+   }
+   
+   m_waveform_cor->SetAxisRange(m_waveform_cor->GetXaxis()->GetXmin(), nwave_max-m_pre_trigs);
+
+   cout << __PRETTY_FUNCTION__ << " END:"
+	<< " Total entries = " << nentries
+	<< " nwave_max=" << m_nwave_max
+	<< " m_nwaves=" << m_nwaves
+	<< " ntrigs_after=" << ntrigs_after
+	<< ( m_runinfo->ntrigs - m_nwaves - ntrigs_after == 0 ? "" : " NOT" )
+	<< " consistent with RunInfo.ntrigs=" << m_runinfo->ntrigs
+	<< endl;
+
+   timer.stop();
+   timer.print(1);
+}
+
+// as size_t
+//______________________________________________________________________
+void SupixAnly::event_display(long ievt)
+{
+   //   In a ROOT session, you can do:
+   //      Root > .L SupixTree.C
+   //      Root > SupixTree t
+   //      Root > t.GetEntry(12); // Fill t data members with entry number 12
+   //      Root > t.Show();       // Show values of entry 12
+   //      Root > t.Show(16);     // Read and show values of entry 16
+   //      Root > t.Loop();       // Loop on all entries
+   //
+
+   //     This is the loop skeleton where:
+   //    jentry is the global entry number in the chain
+   //    ientry is the entry number in the current Tree
+   //  Note that the argument to GetEntry must be:
+   //    jentry for TChain::GetEntry
+   //    ientry for TTree::GetEntry and TBranch::GetEntry
+   //
+   //       To read only selected branches, Insert statements like:
+   // METHOD1:
+   //    fChain->SetBranchStatus("*",0);  // disable all branches
+   //    fChain->SetBranchStatus("branchname",1);  // activate branchname
+   // METHOD2: replace line
+   //    fChain->GetEntry(jentry);       //read all branches
+   //by  b_branchname->GetEntry(ientry); //read only this branch
+   if (fChain == 0) return;
+
+   Long64_t nentries = fChain->GetEntriesFast();
+
+   // fChain->SetBranchStatus("*",0);		// disable all branches
+   // fChain->SetBranchStatus("npixs",1);		// activate branchname
+   // fChain->SetBranchStatus("pixel_cds",1);	// activate branchname
+
+   static vector<Long64_t> jevent;	// jentry of events
+   static vector<int> jcut;		// ncuts of events
+   static vector<double> jcutmin;	// min sigma passing cut
+   
+   // pave size
+   int nlines = 5;
+   double text_h = 0.035;
+   double x1 = 0.01;
+   double xw = 0.27;
+   double y1, y2 = 0.995;
+   
+   // first execute
+   // - scan for potential events
+   if (jevent.size() == 0) {
+      Long64_t nbytes = 0, nb = 0;
+      for (Long64_t jentry=0; jentry<nentries;jentry++) {
+	 Long64_t ientry = LoadTree(jentry);
+	 if (ientry < 0) break;
+	 nb = fChain->GetEntry(jentry);   nbytes += nb;
+	 // if (Cut(ientry) < 0) continue;
+      
+	 // pixel-wise histograms
+	 cds_t*		pcds = (cds_t*)pixel_cds;
+	 double*	pcds_mean = (double*)(m_runinfo->cds_mean);
+	 double*	pcds_sigma = (double*)(m_runinfo->cds_sigma);
+	 double	cds_cor;
+	 int ncuts = 0;
+	 double cutmin = 999;
+	 double chi2_cds = 0;
+	 for (int i=0; i < NROWS; i++) {//++++++++++++++++++++++++++++++start loop a frame
+	    for (int j=0; j < NCOLS; j++) {
+	       cds_cor = *pcds - *pcds_mean;
+	       cds_cor /= *pcds_sigma;		// normalized
+	       chi2_cds += cds_cor*cds_cor;
+	       
+	       if (cds_cor < -g_cds_sum_x) {	// Esum???
+		  ncuts++;
+		  if (cutmin > -cds_cor)
+		     cutmin = -cds_cor;
+	       }
+	       
+	       // next pixel
+	       pcds++;
+	       pcds_mean++;
+	       pcds_sigma++;
+	    }
+	 }//------------------------------------------------------------end loop a frame
+
+	 if (! (npixs > 0 || ncuts > 10 || chi2_cds > g_chi2_cds_x) ) continue;
+
+	 // special events
+	 if (chi2_cds > g_chi2_cds_x && npixs < 1) {
+	    cout << "\tspecial #" << jevent.size()
+		 << " frame=" << frame
+		 << " chi2_cds=" << chi2_cds
+		 << " npixs=" << npixs
+		 << " ncuts=" << ncuts
+		 << endl;
+	 }
+
+	 jevent.push_back(jentry);
+	 jcut.push_back(ncuts);
+	 jcutmin.push_back(cutmin);
+      }
+
+      // prepare plots
+      //
+      // event display
+      int xbins, ybins;
+      double xmin, xmax, ymin, ymax;
+      xmin = 0, xmax = NROWS;
+      xbins = xmax - xmin;
+      ymin = 0, ymax = NCOLS;
+      ybins = ymax - ymin;
+      string hname = "event_cds";
+      ostringstream oss;
+      oss << ";ROW;COL;CDS";
+      string htitle = oss.str();
+      TH2D* h2d = (TH2D*)gDirectory->Get(hname.c_str() );
+      if (h2d) delete h2d;
+      h2d = new TH2D(hname.c_str(), htitle.c_str(), xbins, xmin, xmax, ybins, ymin, ymax);
+      m_event.display_cds = h2d;
+      h2d->SetStats(0);
+
+      // event information
+      y1 = y2 - text_h * nlines;
+      m_event.info = new TPaveText(x1, y1, x1+xw, y2, "NDC NB");
+      m_event.info->SetTextAlign(12);
+      x1 += xw + 0.005;
+      y1 = y2 - text_h;
+      m_event.pixs = new TPaveText(x1, y1, x1+xw, y2, "NDC NB");
+      m_event.pixs->SetTextAlign(12);
+
+#if ROOT_VERSION_CODE >= ROOT_VERSION(6, 0, 0)
+      m_event.info->SetFillColorAlpha(9, 0.1);
+      m_event.pixs->SetFillColorAlpha(9, 0.1);
+#else
+      m_event.info->SetFillColor(0);
+      m_event.pixs->SetFillColor(0);
+#endif
+      
+   }
+
+   //----------------------------------------
+   
+   if (ievt >= (long)(jevent.size() ) ) {
+      LOG << "exceeding max number of events: " << jevent.size() << endl;
+      return;
+   }
+
+   Long64_t jentry = jevent.at(ievt);
+   int ncuts = jcut.at(ievt);
+   double cutmin = jcutmin.at(ievt);
+   
+   fChain->GetEntry(jentry);
+   
+   adc_t*	padc = (adc_t*)pixel_adc;
+   cds_t*	pcds = (cds_t*)pixel_cds;
+   double*	pthr = (double*)(m_runinfo->trig_cds);
+   double*	pcds_mean = (double*)(m_runinfo->cds_mean);
+   double*	pcds_sigma = (double*)(m_runinfo->cds_sigma);
+   double*	padc_mean = (double*)(m_runinfo->adc_mean);
+   double*	padc_sigma = (double*)(m_runinfo->adc_sigma);
+   double	cds_cor, adc_cor;
+   double	chi2_cds = 0;
+   double	cds_min = 0, cds_max = 0;
+   for (int i=0; i < NROWS; i++) {//++++++++++++++++++++++++++++++++++++start a frame
+      for (int j=0; j < NCOLS; j++) {
+	 cds_cor = *pcds - *pcds_mean;
+	 cds_cor /= *pcds_sigma;		// normalized
+	 adc_cor = *padc - *padc_mean;
+	 adc_cor /= *padc_sigma;		// normalized
+
+	 if (cds_min > cds_cor)	cds_min = cds_cor;
+	 if (cds_max < cds_cor)	cds_max = cds_cor;
+	 
+	 chi2_cds += cds_cor * cds_cor;
+	 
+	 m_event.display_cds->SetBinContent(i+1, j+1, -cds_cor);
+	 
+	 // next pixel
+	 padc++;
+	 pcds++;
+	 pthr++;
+	 pcds_mean++;
+	 pcds_sigma++;
+	 padc_mean++;
+	 padc_sigma++;
+      }
+   }//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~end a frame
+   
+   double pixcds[npixs];
+   for (int i=0; i < npixs; i++) {
+      int row = pixid[i] >> NBITS_COL;
+      int col = pixid[i] &  MASK_COL;
+      double cds_cor = pixel_cds[row][col] - m_runinfo->cds_mean[row][col];
+      cds_cor /= m_runinfo->cds_sigma[row][col];	// normalize by sigma
+      pixcds[i] = -cds_cor;
+   }
+
+   LOG << "total events=" << jevent.size()
+       << "/" << ievt << " :";
+   cout << " frame=" << frame
+	<< " chi2_cds=" << chi2_cds
+	<< " ncuts=" << ncuts
+	<< " npixs=" << npixs
+	<< " [row col cds] ="
+      ;
+   for (int i=0; i < npixs; i++) {
+      int row = pixid[i] >> NBITS_COL;
+      int col = pixid[i] &  MASK_COL;
+      cout << " [" << row << " " << col << " " << pixcds[i] << "]";
+   }
+   cout << endl;
+
+   // event information
+   ostringstream oss;
+   m_event.info->Clear();
+   m_event.info->AddText(m_runinfo->time_start_str.c_str() );
+   oss.str(""); oss << "chip\t" << m_runinfo->chip_addr;
+   m_event.info->AddText(oss.str().c_str() );
+   oss.str(""); oss << "threshold\t" << m_runinfo->trig_cds_x << " #sigma";
+   m_event.info->AddText(oss.str().c_str() );
+   oss.str(""); oss << "frame\t" << frame;
+   m_event.info->AddText(oss.str().c_str() );
+   oss.str(""); oss << "trigger\t0x" << hex << (short)trig << dec;
+   m_event.info->AddText(oss.str().c_str() );
+
+   m_event.pixs->Clear();
+   y1 = y2 - text_h * (npixs + 3);	// + chi2_cds, ncuts
+   m_event.pixs->SetY1NDC(y1);
+   oss.str("");
+   oss << "#chi^{2}_{CDS} = " << chi2_cds << "/" << g_chi2_cds_x;
+   m_event.pixs->AddText(oss.str().c_str() );
+   
+   oss.str("");
+   oss << "CDS #in [ " << cds_min << ", " << cds_max << " ]";
+   m_event.pixs->AddText(oss.str().c_str() );
+   
+   oss.str(""); oss << npixs << " fired" << ": [row col cds]";
+   m_event.pixs->AddText(oss.str().c_str() );
+   for (int i=0; i < npixs; i++) {
+      int row = pixid[i] >> NBITS_COL;
+      int col = pixid[i] &  MASK_COL;
+      oss.str("");
+      oss << "  " << i << ":" << setw(4) << row << setw(4) << col
+	  << "  " << fixed << setprecision(1) << pixcds[i];
+      m_event.pixs->AddText(oss.str().c_str() );
+   }
+
+}
+
+//______________________________________________________________________
+void SupixAnly::physics(Long64_t nentries)
+{
+   if (fChain == 0) return;
+
+   Timer timer(__func__);
+   timer.start();
+   
+   if (! m_booked)
+      Book();
+
+   if (nentries == 0)
+      nentries = fChain->GetEntriesFast();
+
+   //
+   // before starting the global loop
+   //
+   Long64_t nbytes = 0, nb = 0;
+   for (Long64_t jentry=0; jentry<nentries;jentry++) {
+      Long64_t ientry = LoadTree(jentry);
+      if (ientry < 0) break;
+      nb = fChain->GetEntry(jentry);
+      nbytes += nb;
+      // if (Cut(ientry) < 0) continue;
+      //--------------------------------------->> start here
+
+      // for each new tree
+      if (ientry == 0) {
+	 LOG << fChain->GetCurrentFile()->GetName() << endl;
+	 m_runinfo = (RunInfo*)fChain->GetTree()->GetUserInfo()->At(0);
+      }
+
+      // of triged frame
+      if (phys_trig(trig) && npixs == 1) {
+	 for (int i=0; i < npixs; i++) {
+	    int row = pixid[i] >> NBITS_COL;
+	    int col = pixid[i] &  MASK_COL;
+	    double cds_cor = pixel_cds[row][col] - m_runinfo->cds_mean[row][col];
+	    cds_cor /= m_runinfo->cds_sigma[row][col];	// normalize by sigma
+
+	    if (row > 1) {
+	       m_cds_1pix->Fill(-cds_cor);
+	    }
+	 }
+      }
+	 
+      // next frame
+      if (ientry%10000 == 0)
+	 LOG
+	    << " entry = " << ientry << "/" << jentry
+	    << " bytes = " << nb << "/" << nbytes
+	    << endl;
+   }
+
+   LOG
+      << " Total entries = " << nentries
+      << endl;
+
+   timer.stop();
+   timer.print(1);
+   
+}

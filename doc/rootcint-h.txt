@@ -1,0 +1,109 @@
+
+This program generates the CINT dictionaries needed in order to
+get access to your classes via the interpreter.
+In addition rootcint can generate the Streamer(), TBuffer &operator>>()
+and ShowMembers() methods for ROOT classes, i.e. classes using the
+ClassDef and ClassImp macros.
+
+Rootcint can be used like:
+
+  rootcint TAttAxis.h[{+,-}][!] ... [LinkDef.h] > AxisDict.cxx
+
+or
+
+  rootcint [-v[0-4]] [-l] [-f] dict.C [-c] [-p] TAxis.h[{+,-}][!] ... [LinkDef.h] 
+
+The difference between the two is that in the first case only the
+Streamer() and ShowMembers() methods are generated while in the
+latter case a complete compileable file is generated (including
+the include statements). The first method also allows the
+output to be appended to an already existing file (using >>).
+The optional - behind the header file name tells rootcint
+to not generate the Streamer() method. A custom method must be
+provided by the user in that case. For the + and ! options see below.
+
+When using option -c also the interpreter method interface stubs
+will be written to the output file (AxisDict.cxx in the above case).
+By default the output file will not be overwritten if it exists.
+Use the -f (force) option to overwite the output file. The output
+file must have one of the following extensions: .cxx, .C, .cpp,
+.cc, .cp.
+
+Use the -p option to request the use of the compiler's preprocessor
+instead of CINT's preprocessor.  This is useful to handle header
+files with macro construct not handled by CINT.
+
+Use the -l (long) option to prepend the pathname of the
+dictionary source file to the include of the dictionary header.
+This might be needed in case the dictionary file needs to be
+compiled with the -I- option that inhibits the use of the directory
+of the source file as the first search directory for
+"#include "file"".
+The flag --lib-list-prefix=xxx can be used to produce a list of
+libraries needed by the header files being parsed. Rootcint will
+read the content of xxx.in for a list of rootmap files (see
+rlibmap). Rootcint will read these files and use them to deduce a
+list of libraries that are needed to properly link and load this
+dictionary. This list of libraries is saved in the file xxx.out.
+This feature is used by ACliC (the automatic library generator).
+The verbose flags have the following meaning:
+      -v   Display all messages
+      -v0  Display no messages at all.
+      -v1  Display only error messages (default).
+      -v2  Display error and warning messages.
+      -v3  Display error, warning and note messages.
+      -v4  Display all messages
+rootcint also support the other CINT options (see 'cint -h)
+
+Before specifying the first header file one can also add include
+file directories to be searched and preprocessor defines, like:
+   -I../include -DDebug
+
+The (optional) file LinkDef.h looks like:
+
+#ifdef __CINT__
+
+#pragma link off all globals;
+#pragma link off all classes;
+#pragma link off all functions;
+
+#pragma link C++ class TAxis;
+#pragma link C++ class TAttAxis-;
+#pragma link C++ class TArrayC-!;
+#pragma link C++ class AliEvent+;
+
+#pragma link C++ function StrDup;
+#pragma link C++ function operator+(const TString&,const TString&);
+
+#pragma link C++ global gROOT;
+#pragma link C++ global gEnv;
+
+#pragma link C++ enum EMessageTypes;
+
+#endif
+
+This file tells rootcint for which classes the method interface
+stubs should be generated. A trailing - in the class name tells
+rootcint to not generate the Streamer() method. This is necessary
+for those classes that need a customized Streamer() method.
+A trailing ! in the class name tells rootcint to not generate the
+operator>>(TBuffer &b, MyClass *&obj) method. This is necessary to
+be able to write pointers to objects of classes not inheriting from
+TObject. See for an example the source of the TArrayF class.
+If the class contains a ClassDef macro, a trailing + in the class
+name tells rootcint to generate an automatic Streamer(), i.e. a
+streamer that let ROOT do automatic schema evolution. Otherwise, a
+trailing + in the class name tells rootcint to generate a ShowMember
+function and a Shadow Class. The + option is mutually exclusive with
+the - option. For new classes the + option is the
+preferred option. For legacy reasons it is not yet the default.
+When this linkdef file is not specified a default version exporting
+the classes with the names equal to the include files minus the .h
+is generated.
+
+*** IMPORTANT ***
+1) LinkDef.h must be the last argument on the rootcint command line.
+2) Note that the LinkDef file name MUST contain the string:
+   LinkDef.h, Linkdef.h or linkdef.h, i.e. NA49_LinkDef.h is fine,
+   just like linkdef1.h. Linkdef.h is case sensitive.
+

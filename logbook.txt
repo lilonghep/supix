@@ -1,0 +1,173 @@
+########################################################################
+# $Id: logbook.txt 1236 2020-07-25 10:03:43Z mwang $
+#
+# book-keeping development
+#
+#
+# @createdby:  WANG Meng <mwang@sdu.edu.cn> at 2020-07-06 11:59:08
+# @copyright:  (c)2020 HEPG - Shandong University. All Rights Reserved.
+########################################################################
+
+20200706
+* RunInfo	- print CDS noise
+* waveform	- SupixAnly, added to control plots
+  
+20200707
+* seperate stats() out of Timer.
+* daq.cxx	- usage() improved
+
+* improved noise treatment
+  - noise_run mode added: daq.exe -N ...
+  - noise_run SHOULD be taken before a physics run.
+  - noise files are saved in the same directory as data files.
+  - noise files with normalized names are hard linked to the newest
+    noise files simultaneously for reading.
+  - in physics run, noise data are saved in RunInfo.
+  - RunInfo is updated to version 3 accordingly.
+  - SupixTree is updated as well.
+  - pipeline_t is updated with O_NOISE mode.
+  - SupixAnly and analyser.C are updated as well.
+
+
+20200708 - wm
+* record in root fired pixels for data analysis.
+  - npixs, pixid[npixs]
+
+
+20200709 - wm
+* ADC noise added.
+  RunInfo v4		- adc_mean/sigma added
+
+
+20200710
+* SupixDAQ		- cds trigger changed for negative pulses
+
+* waveform analysis
+  SupixDAQ		- npixs and pixid[] added to tree
+  			- frame_1st removed from tree
+  SupixAnly		- waveforms for individual pixels
+  			- baseline corrected CDS & ADC
+* analyser
+  - g_print added to control c1->Print(...)
+  - baseline() added to visualize CDS & ADC noise parameters in
+    RunInfo.
+  - more plots added.
+
+* SupixAnly
+  - TH1D trig_cds added.
+  - waveform code seperated from main Loop().
+
+* pipeline_t
+  - [bugfix] lock all actions, otherwise ntrigs_cds not consistent.
+
+
+20200711
+* improved control plots.
+  - analyser: automate drawing and saving.
+  - SuperAnly: re-arranged/-define some histograms.
+  - Timer: added printing in different units.
+
+20200712
+* analysis
+  - column marks added.
+  - print-control utilities moved to common_root.h
+  - scan() moved to SupixAnly
+  
+* book.cxx added to seperate histogram booking from analysis.
+  - RunInfo added.
+  
+* SupixAnly
+  - sum_cds vs npixs added.
+
+20200713
+* data taking
+  - DAQ_MODE_t defined.
+  - CONTINUOUS mode added for waveform analysis.
+  - RunInfo version updated to 5.
+
+* analysis
+  - selected pixel for waveform.
+  - waveform of sum ADC and CDS per frame added.
+
+
+20200714
+* analysis
+  - normalize CDS and ADC with noise sigma
+  - analyser::waveform_pix() added set_print().
+
+* common_root.h
+  - watermark() added.
+
+* event display added.
+  - with event information
+
+
+20200715
+* CDS trigger threshold (trig_cds) changed from int to double.
+  - RunInfo V6
+
+* more waveforms of sum CDS added.
+
+* chi2_cds added for Esum study.
+
+
+20200717
+* common_root.h
+  - set_pave() added.
+  - set_stats() improved
+  - divide() added to replace TPad::Divide()
+
+* analyser
+  - added functions drawing pixels' ADC and CDS.
+
+
+20200719
+* all pixels' ADC and CDS waveformed added.
+* Nup_CL.cxx added to estimate pipeline length.
+* some clean-up
+
+* analysis: dTevt added on control plots.
+
+* waveforms of pixels are saved in a subdir instead of TList because
+  of bytecount limit.
+
+
+20200725
+* fixed empty RunInfo issue of ROOT v5
+* information improved.
+
+
+
+TODO
+------------------------------------------------------------------------
+analysis
+* what to check?
+* visualize noise distribution
+* CDS distribution of fired pixels
+* physics signal: number of hits or sum of amplitudes?
+  - dependence on trigger threshold?
+  - cluster?
+
+* control plots
+  - all triged: trig
+  - cds triged: fid, npixs, cds, adc (raw, cor, all, frame)
+  
+  - random trig
+  - hit pattern, cluster
+  - duration between two consecutive trigs
+
+DAQ
+* how to assign #frame via reader?
+* Esum?
+* continuous data taking
+
+
+Makefile
+
+会：FIFO数据格式和buffer等
+
+issues
+------------------------------------------------------------------------
+Error in <TBufferFile::WriteByteCount>: bytecount too large (more than 1073741822)
+
+TList = 1024 TMultiGraph x 1024 frames x 64 waves

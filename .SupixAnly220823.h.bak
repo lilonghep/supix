@@ -1,0 +1,180 @@
+/*******************************************************************//**
+ * $Id: SupixAnly.h 1271 2021-03-30 01:43:18Z mwang $
+ *
+ * analysis class base on skeleton produce by tree->MakeClass("...").
+ *
+ *
+ * @createdby:  WANG Meng <mwang@sdu.edu.cn> at 2019-04-18 23:01:17
+ * @copyright:  (c)2019 HEPG - Shandong University. All Rights Reserved.
+ ***********************************************************************/
+#ifndef SupixAnly_h
+#define SupixAnly_h
+
+#include "mydefs.h"
+#include "RunInfo.h"
+#include "SupixTree.h"
+
+#include "TCanvas.h"
+#include <math.h>
+
+#define NWAVE_MAX	1000	// limit frames of a waveform
+
+const int g_npixs_max	= 10;
+const int g_cds_max	=  30;
+const int g_cds_min	= -120;
+const int g_cds_sum_min	= -200;
+const int g_adc_max	= 0x10000;
+const int g_adc_bin	= 0x100;
+const int g_adc_cor_max	=  55;		// ADC normalized
+const int g_adc_cor_min	= -55;		// ADC normalized
+const double g_cds_sum_x	= 5.0;		// try Npixels with cds > x*sigma
+const double g_chi2_cds_x	= NPIXS+sqrt(2.0*NPIXS)*8;	// 8x sigma
+const double g_chi2_min	= 800;
+const double g_chi2_max	= 1800;
+
+//======================================================================
+
+class TH1D;
+class TH2D;
+class TProfile;
+class TMultiGraph;
+class TPaveText;
+
+struct event_t {
+   // void set(unsigned long i=0);
+   TH2D *	display_cds;	// event display with cds
+   TPaveText* 	info;
+   TPaveText* 	pixs;
+} ;
+
+class SupixAnly : public SupixTree
+{
+   event_t m_event;
+   
+public:
+   // constructor(s)
+   SupixAnly(TTree *tree=0);
+   ~SupixAnly();
+   
+   void event_display(long);
+
+   event_t get_event(long ievt = -1) {
+      if (ievt >= 0)
+	 event_display(ievt);
+      return m_event;
+   }
+
+   // retrieve RunInfo
+   virtual RunInfo * get_RunInfo();
+
+   // book histograms
+   virtual void Book();
+
+   // write non-histogram objects
+   virtual void Write();
+   
+   // physics analysis
+   void physics(Long64_t nentries);
+   
+   // fill histograms
+   void Loop(Long64_t nentries);
+
+   // why can't it be overridden? -- NOT virtual inheritance!
+   void Loop();
+
+   void set_nwaves_max(int x)	{ m_nwaves_max = x; }
+   void build_waveform(Long64_t nentries=0, int row=-1, int col=-1);
+   void fill_waveform();
+   void write_waveform();
+
+   bool true_trig(trig_t x)		// true triged frame
+   { return x > 0 && x < TRIG_PRE; }
+
+   bool phys_trig(trig_t x)		// physics triged frame
+   { return x > 1 && x < TRIG_PRE; }
+
+   void scan(int row=0, int col=0, const char* cut="");
+   
+private:
+   TCanvas *	m_c1;
+   RunInfo *	m_runinfo;
+   int		m_runinfo_version;
+
+   // histograms
+   TList *	m_list_adc;
+   TList *	m_list_cds;
+   TH1D *	m_adc[NROWS][NCOLS];
+   TH1D *	m_cds[NROWS][NCOLS];
+
+   TList *	m_list_misc;
+   TH1D *	m_trig;
+   TH1D *	m_fid;
+   TH1D *	m_npixs;	// of non-periodic trigs
+   TH1D *	m_chi2_cds;	// CDS chi2 per frame
+   TH1D *	m_chi2_trig;	// chi2 of triged frame
+   TH1D *	m_dTevt;	// time different between consecutive events
+
+   TH1D *	m_trig_cds;	// cds of triged pixels
+   TH1D *	m_trig_cds_sum;	// cds sum of triged pixels
+   TH2D *	m_trig_cds_npixs;	// cds sum vs npixs
+   TH2D *	m_hitmap_cds;	// hit-map of pixels with |CDS-mean| > sigma * cds_x
+   TH1D *	m_cds_raw;	// raw
+   TH1D *	m_cds_cor;	// noise corrected
+   TProfile *	m_cds_frame_raw;
+   TProfile *	m_cds_frame_cor;
+
+   TH1D *	m_adc_raw;
+   TH1D *	m_adc_cor;
+   TProfile *	m_adc_frame_raw;
+   TProfile *	m_adc_frame_cor;
+
+   TH1D *	m_cds_1pix;	// npixs == 1
+   
+   bool		m_booked;
+
+   // waveform analysis
+   //----------------------------------------
+   int		m_nwaves_max;	// max number of waves
+   int		m_nwaves;
+   int		m_pre_trigs;
+   int		m_post_trigs;
+   int		m_nwave_max;	// max Nframes per waveform
+   int		m_nwave_frames;	// frame index of a waveform
+   int		m_exceedings;
+   int		m_nwave_trig;	// offset of first triged frame
+   int		m_nwave_norm;	// normal waveform length
+   int		m_npixs_trig;	// npixs of triged frame
+   ULong64_t	m_frame_start;	// start frame of a waveform
+   short	m_wave_trig;	// trig of a waveform
+   
+   // waveform of single pixels
+   bool		m_continuous;	// continuous daq mode
+   bool		m_pix_fired;
+   int		m_pix_row;
+   int		m_pix_col;
+
+   TList *	m_list_wave_adc;
+   TMultiGraph* m_mg_adc_pixs;
+   double *	m_wave_adc_pixs;
+
+   TList *	m_list_wave_cds;
+   TMultiGraph* m_mg_cds_pixs;
+   double *	m_wave_cds_pixs;
+
+   TMultiGraph* m_mg_adc_frame;
+   double *	m_wave_adc_frame;	// waveform of sum adc of a frame
+
+   TMultiGraph* m_mg_cds_trig;
+   double *	m_wave_cds_trig;	// cds of single pixel
+
+   TProfile *	m_waveform_cor;		// noise corrected cds summed of all pixels per frame
+
+   TMultiGraph* m_mg_cds_frame;		// waveforms container
+   double *	m_wave_cds_frame;	// sum of cds per frame
+
+   TMultiGraph* m_mg_chi2_cds;
+   double *	m_wave_chi2_cds;	// cds of single pixel
+
+};
+
+#endif //~ SupixAnly_h

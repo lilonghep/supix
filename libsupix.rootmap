@@ -1,0 +1,8 @@
+[ libsupix.so ]
+# List of selected classes
+class RunInfo
+class SupixAnly
+class SupixTree
+header RunInfo.h
+header SupixAnly.h
+header SupixTree.h
